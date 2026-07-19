@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Playtest checklist</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #1b1c1f;
+    --panel: #24262b;
+    --border: #38393f;
+    --text: #e6e6e8;
+    --dim: #9a9ba1;
+    --pass: #3fb950;
+    --fail: #e5534b;
+    --unsure: #9a9ba1;
+    --accent: #5b9dff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 24px 96px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    max-width: 760px;
+    margin-inline: auto;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  .sub { color: var(--dim); font-size: 0.85rem; margin-bottom: 28px; }
+  .group { margin-bottom: 28px; }
+  .group h2 {
+    font-size: 0.95rem;
+    color: var(--accent);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+    margin-bottom: 12px;
+  }
+  .item {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+  }
+  .item.already-confirmed { opacity: 0.55; }
+  .item-text { font-size: 0.92rem; line-height: 1.4; margin-bottom: 8px; }
+  .item-text code {
+    background: #000000aa;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    color: var(--dim);
+  }
+  .existing-annotation {
+    font-size: 0.8rem;
+    color: var(--dim);
+    margin: -2px 0 8px;
+    padding-left: 2px;
+    border-left: 2px solid var(--border);
+    padding-left: 8px;
+  }
+  .verdicts { display: flex; gap: 6px; margin-bottom: 8px; }
+  .verdict-btn {
+    flex: 1;
+    padding: 6px 0;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #1b1c1f;
+    color: var(--dim);
+    font-size: 0.82rem;
+    cursor: pointer;
+  }
+  .verdict-btn:hover { border-color: var(--accent); }
+  .verdict-btn.active[data-verdict="pass"] { background: var(--pass); color: #0a0a0a; border-color: var(--pass); }
+  .verdict-btn.active[data-verdict="fail"] { background: var(--fail); color: #0a0a0a; border-color: var(--fail); }
+  .verdict-btn.active[data-verdict="unsure"] { background: var(--unsure); color: #0a0a0a; border-color: var(--unsure); }
+  .item-note {
+    width: 100%;
+    background: #1b1c1f;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 0.82rem;
+    padding: 6px 8px;
+    resize: vertical;
+    min-height: 32px;
+    font-family: inherit;
+  }
+  .empty {
+    color: var(--dim);
+    font-size: 0.9rem;
+    padding: 24px;
+    text-align: center;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+  }
+  .notes-section { margin-top: 8px; }
+  .notes-section label {
+    display: block;
+    font-size: 0.85rem;
+    color: var(--dim);
+    margin-bottom: 6px;
+  }
+  #generalNotes {
+    width: 100%;
+    min-height: 90px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 0.9rem;
+    padding: 10px 12px;
+    font-family: inherit;
+    resize: vertical;
+  }
+  .mode-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 24px;
+    font-size: 0.85rem;
+    color: var(--dim);
+    cursor: pointer;
+    user-select: none;
+  }
+  .mode-toggle input { accent-color: var(--accent); width: 15px; height: 15px; }
+  .mode-toggle .hint {
+    font-size: 0.78rem;
+    color: var(--dim);
+    opacity: 0.75;
+  }
+  .field-label {
+    font-size: 0.72rem;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    margin: 0 0 3px 2px;
+  }
+  .expected-actual { margin-bottom: 6px; }
+  /* Default (simple mode): show the single freeform note, hide expected/actual */
+  .simple-note { display: block; }
+  .expected-actual-group { display: none; }
+  body.detailed-mode .simple-note { display: none; }
+  body.detailed-mode .expected-actual-group { display: block; }
+  .submit-bar {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    background: linear-gradient(to top, var(--bg) 70%, transparent);
+    padding: 20px 24px 24px;
+    display: flex;
+    justify-content: center;
+  }
+  #submitBtn {
+    background: var(--accent);
+    color: #0a0a0a;
+    border: none;
+    border-radius: 8px;
+    padding: 12px 28px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    max-width: 760px;
+    width: 100%;
+  }
+  #submitBtn:disabled { opacity: 0.5; cursor: default; }
+  #status {
+    text-align: center;
+    font-size: 0.85rem;
+    color: var(--dim);
+    margin-top: 10px;
+    min-height: 1.2em;
+  }
+</style>
+</head>
+<body>
+  <h1 id="pageTitle">Playtest checklist</h1>
+  <div class="sub">
+    Mark what you actually verified this session. Checking a box here doesn't change
+    <code>TESTING.md</code> — submitting queues this report for an agent (or teammate)
+    to review and record confirmed/broken verdicts from there.
+  </div>
+
+  <label class="mode-toggle" title="Toggle on for a tricky/complex check that's worth spelling out precisely; leave off for routine checks.">
+    <input type="checkbox" id="detailedMode">
+    Detailed mode
+    <span class="hint">— splits each item's note into Expected vs. Actual. Turn on for a tricky/complex check.</span>
+  </label>
+
+  <div id="groups"></div>
+
+  <div class="notes-section">
+    <label for="generalNotes">Anything else worth flagging (general notes, not tied to one item)</label>
+    <textarea id="generalNotes" placeholder="Optional..." title="Anything that doesn't fit a specific checklist item -- a new bug you noticed, a question worth flagging, general impressions."></textarea>
+  </div>
+
+  <div class="submit-bar">
+    <div style="max-width:760px; width:100%;">
+      <button id="submitBtn" title="Queues your marked items and notes for review -- this does not check anything off in TESTING.md itself.">Submit for review</button>
+      <div id="status"></div>
+    </div>
+  </div>
+
+<script src="app.js"></script>
+</body>
+</html>
