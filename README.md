@@ -81,6 +81,29 @@ this report (the file itself is left on disk either way). The final submitted re
 JSON references screenshots by filename, so a reviewing agent can open them directly
 rather than unpacking base64 blobs.
 
+## Promoting a screenshot to the project's playtest history
+
+`.playtest-submissions/` is ephemeral and gitignored — it's a review queue, not a
+record. `playtest-history/` (committed, alongside `TESTING.md`) is the opposite: a
+curated, permanent visual changelog of the app's progression.
+
+When a reviewing agent processes a submission and finds an item verdicted "pass"
+("Looks good") with a screenshot attached, it's a judgment call whether that screenshot
+is worth keeping — a first correct render of a feature, a regression now visibly fixed,
+a notable UI milestone — versus routine day-to-day confirmation that isn't. Most
+"pass" screenshots should **not** be promoted; only genuinely milestone-worthy ones. When
+one is, run:
+
+```bash
+python3 promote_screenshot.py --testing-file /path/to/project/TESTING.md \
+    --screenshot 2026-07-19T15-33-52-7d808ca9.png \
+    --caption "Caret held steady while hovering a different row's icons (task 6.6)"
+```
+
+This copies the file into `<project>/playtest-history/screenshots/` and appends a dated
+entry (image + caption) to `<project>/playtest-history/HISTORY.md`. The original in
+`.playtest-submissions/` is left untouched.
+
 ## Stack
 
 Deliberately stdlib-only Python (`http.server`) plus a static HTML/JS page — no build
