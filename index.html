@@ -44,7 +44,14 @@
     margin-bottom: 10px;
   }
   .item.already-confirmed { opacity: 0.55; }
-  .item-text { font-size: 0.92rem; line-height: 1.4; margin-bottom: 8px; }
+  .item-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .item-text { font-size: 0.92rem; line-height: 1.4; flex: 1; }
   .item-text code {
     background: #000000aa;
     padding: 1px 5px;
@@ -138,11 +145,30 @@
     margin: 0 0 3px 2px;
   }
   .expected-actual { margin-bottom: 6px; }
-  /* Default (simple mode): show the single freeform note, hide expected/actual */
+  .item-detail-toggle {
+    flex-shrink: 0;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--dim);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    border-radius: 5px;
+    padding: 3px 7px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .item-detail-toggle:hover { border-color: var(--accent); color: var(--text); }
+  .item-detail-toggle.active { background: var(--accent); color: #0a0a0a; border-color: var(--accent); }
+  /* Default (simple mode): show the single freeform note, hide expected/actual.
+     Detailed can be turned on globally (body.detailed-mode, every item) or per item
+     (.item.detailed, that item only, independent of the global setting). */
   .simple-note { display: block; }
   .expected-actual-group { display: none; }
-  body.detailed-mode .simple-note { display: none; }
-  body.detailed-mode .expected-actual-group { display: block; }
+  body.detailed-mode .simple-note,
+  .item.detailed .simple-note { display: none; }
+  body.detailed-mode .expected-actual-group,
+  .item.detailed .expected-actual-group { display: block; }
   .submit-bar {
     position: fixed;
     bottom: 0; left: 0; right: 0;
@@ -181,10 +207,10 @@
     to review and record confirmed/broken verdicts from there.
   </div>
 
-  <label class="mode-toggle" title="Toggle on for a tricky/complex check that's worth spelling out precisely; leave off for routine checks.">
+  <label class="mode-toggle" title="Applies Detailed mode to every item by default. You can still flip individual items on/off with the per-item 'Detailed' button.">
     <input type="checkbox" id="detailedMode">
-    Detailed mode
-    <span class="hint">— splits each item's note into Expected vs. Actual. Turn on for a tricky/complex check.</span>
+    Detailed mode (all items)
+    <span class="hint">— splits each item's note into Expected vs. Actual. Turn on for a tricky/complex pass, or just toggle individual items below.</span>
   </label>
 
   <div id="groups"></div>

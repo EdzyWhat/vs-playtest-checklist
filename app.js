@@ -5,9 +5,12 @@
 // session -- this page never writes to TESTING.md itself (that file's checked boxes are
 // meant to be written only from confirmed, first-hand evidence).
 //
-// Detailed mode (toggle, persisted via localStorage) swaps each item's single freeform
-// note for a separate Expected/Actual pair -- worth the extra typing for a tricky check,
-// overkill for routine ones, hence the toggle rather than always-on.
+// Detailed mode swaps an item's single freeform note for a separate Expected/Actual
+// pair -- worth the extra typing for a tricky check, overkill for routine ones. It can
+// be turned on two ways, independently: the page-wide toggle (persisted via
+// localStorage, applies to every item by default) and a per-item "Detailed" button
+// (applies to just that one item, on top of whatever the page-wide toggle is set to).
+// An item is rendered as detailed if EITHER is on -- see isItemDetailed().
 
 const pageTitleEl = document.getElementById("pageTitle");
 const groupsEl = document.getElementById("groups");
@@ -22,6 +25,13 @@ let loadedGroups = [];
 
 function applyDetailedMode(enabled) {
   document.body.classList.toggle("detailed-mode", enabled);
+  // Per-item toggle buttons read as "active" if either the global mode or their own
+  // item-level override is on, so the button never looks inactive while its field is
+  // actually showing.
+  document.querySelectorAll(".item-detail-toggle").forEach((btn) => {
+    const itemEl = btn.closest(".item");
+    btn.classList.toggle("active", enabled || itemEl.classList.contains("detailed"));
+  });
 }
 
 detailedModeEl.checked = localStorage.getItem(DETAILED_MODE_KEY) === "1";
@@ -78,10 +88,27 @@ function renderGroups(groups, metaFound) {
       itemEl.dataset.taskId = item.taskId || "";
       itemEl.dataset.text = item.text;
 
+      const topEl = document.createElement("div");
+      topEl.className = "item-top";
+
       const textEl = document.createElement("div");
       textEl.className = "item-text";
       textEl.innerHTML = `${escapeHtml(item.text)} <code>${item.fingerprint}</code>`;
-      itemEl.appendChild(textEl);
+      topEl.appendChild(textEl);
+
+      const detailToggleBtn = document.createElement("button");
+      detailToggleBtn.type = "button";
+      detailToggleBtn.className = "item-detail-toggle";
+      detailToggleBtn.textContent = "Detailed";
+      detailToggleBtn.title = "Split this item's note into Expected vs. Actual (just for this item).";
+      detailToggleBtn.addEventListener("click", () => {
+        const nowDetailed = !itemEl.classList.contains("detailed");
+        itemEl.classList.toggle("detailed", nowDetailed);
+        detailToggleBtn.classList.toggle("active", nowDetailed || detailedModeEl.checked);
+      });
+      topEl.appendChild(detailToggleBtn);
+
+      itemEl.appendChild(topEl);
 
       if (item.annotation) {
         const annoEl = document.createElement("div");
@@ -167,10 +194,11 @@ async function load() {
 }
 
 function collectReport() {
-  const detailed = detailedModeEl.checked;
+  const globalDetailed = detailedModeEl.checked;
   const items = [];
   document.querySelectorAll(".item").forEach((itemEl) => {
     const activeBtn = itemEl.querySelector(".verdict-btn.active");
+    const detailed = globalDetailed || itemEl.classList.contains("detailed");
 
     let note = null, expected = null, actual = null;
     if (detailed) {
@@ -186,6 +214,7 @@ function collectReport() {
       taskId: itemEl.dataset.taskId || null,
       text: itemEl.dataset.text,
       verdict: activeBtn ? activeBtn.dataset.verdict : null,
+      detailed,
       note,
       expected,
       actual,
@@ -194,7 +223,7 @@ function collectReport() {
 
   return {
     items,
-    detailedMode: detailed,
+    detailedMode: globalDetailed,
     generalNotes: generalNotesEl.value.trim() || null,
   };
 }
