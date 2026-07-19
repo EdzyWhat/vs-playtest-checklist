@@ -46,14 +46,6 @@ Endpoints:
     GET  /api/screenshots/<name> -> serves a previously-uploaded screenshot back
                              (thumbnail preview on the page). Bare filename only --
                              rejects anything containing a path separator.
-    POST /api/capture    -> runs macOS's `screencapture -i -c` on the server (blocking
-                             until the user drags a selection or hits Escape), leaving
-                             the result on the system clipboard -- an alternative to the
-                             user remembering the Cmd+Shift+Ctrl+4 shortcut themselves.
-                             Does not upload anything itself; the user still pastes
-                             (Cmd+V) into an item's note field afterward, same as a
-                             manually-taken screenshot. macOS-only; returns 500 on other
-                             platforms.
 
 Deliberately stdlib-only, no build tooling -- this is a tiny local tool, not a shipped
 app.
@@ -64,7 +56,6 @@ import json
 import mimetypes
 import os
 import re
-import subprocess
 import sys
 import time
 import urllib.parse
@@ -273,9 +264,6 @@ def make_handler(testing_file_path):
 
         def do_POST(self):
             parsed_url = urllib.parse.urlparse(self.path)
-            if parsed_url.path == "/api/capture":
-                self._handle_capture()
-                return
             if parsed_url.path == "/api/screenshot":
                 self._handle_screenshot(parsed_url)
                 return
@@ -314,35 +302,6 @@ def make_handler(testing_file_path):
                 json.dump(parsed, f, indent=2)
 
             self._send_json(200, {"ok": True, "file": os.path.basename(path)})
-
-        def _handle_capture(self):
-            """Runs macOS's own interactive screenshot-to-clipboard tool server-side, so
-            the page can offer a "Take screenshot" button as an alternative to the user
-            remembering Cmd+Shift+Ctrl+4 themselves. Blocks (this handler runs on its own
-            thread -- see ThreadingHTTPServer below) until the user finishes dragging a
-            selection or cancels with Escape. Deliberately leaves the result on the
-            clipboard rather than uploading it directly: pasting into a note field stays
-            the one attach path, so a button-triggered capture behaves identically to a
-            manual one."""
-            try:
-                result = subprocess.run(
-                    ["screencapture", "-i", "-c"], timeout=120
-                )
-            except FileNotFoundError:
-                self._send_json(500, {
-                    "error": "screencapture not found -- this button only works on macOS",
-                })
-                return
-            except subprocess.TimeoutExpired:
-                self._send_json(408, {"error": "screenshot selection timed out"})
-                return
-
-            if result.returncode != 0:
-                # Most commonly: the user pressed Escape to cancel the selection.
-                self._send_json(200, {"ok": False, "cancelled": True})
-                return
-
-            self._send_json(200, {"ok": True})
 
         def _handle_screenshot(self, parsed_url):
             if not submissions_dir:

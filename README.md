@@ -70,14 +70,9 @@ ephemeral working files, not something you'd normally want to commit.
 ## Attaching screenshots
 
 Every item's note field (and the general-notes field) accepts a pasted clipboard
-image — no upload button needed, just click into the field and paste (`Cmd+V`).
-This is designed around macOS's own screenshot-to-clipboard tools:
-
-- `Cmd+Shift+Ctrl+4` (hold `Ctrl` on the usual `Cmd+Shift+4`) grabs a selection
-  straight to the clipboard, no file written to disk.
-- Or click an item's **📷 Screenshot** button, which asks the server to run
-  `screencapture -i -c` for you (same result, no shortcut to remember). Either way,
-  switch back to the browser tab afterward and paste.
+image — take a screenshot with `Cmd+Shift+Ctrl+4` (hold `Ctrl` on the usual
+`Cmd+Shift+4`; grabs a selection straight to the clipboard, no file written to disk),
+then click into the field and paste (`Cmd+V`).
 
 Pasting uploads the image immediately (not held until Submit) to
 `.playtest-submissions/screenshots/` in the project being tested, and shows a small
@@ -85,10 +80,6 @@ thumbnail under the field — click it to open full-size, or the "×" to detach 
 this report (the file itself is left on disk either way). The final submitted report
 JSON references screenshots by filename, so a reviewing agent can open them directly
 rather than unpacking base64 blobs.
-
-The screenshot button/paste-to-clipboard flow is macOS-specific (`screencapture` is a
-macOS binary); pasting a clipboard image still works on any OS/browser that puts image
-data on the clipboard, only the button is macOS-only.
 
 ## Stack
 

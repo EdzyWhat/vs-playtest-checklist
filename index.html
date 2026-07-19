@@ -160,7 +160,17 @@
   }
   .item-detail-toggle:hover { border-color: var(--accent); color: var(--text); }
   .item-detail-toggle.active { background: var(--accent); color: #0a0a0a; border-color: var(--accent); }
-  .screenshot-btn { white-space: nowrap; }
+  .screenshot-hint {
+    font-size: 0.78rem;
+    color: var(--dim);
+    margin: -6px 0 22px;
+  }
+  .screenshot-hint code {
+    background: #000000aa;
+    padding: 1px 5px;
+    border-radius: 4px;
+    color: var(--text);
+  }
   .screenshots {
     display: flex;
     flex-wrap: wrap;
@@ -252,6 +262,11 @@
     Detailed mode (all items)
     <span class="hint">— splits each item's note into Expected vs. Actual. Turn on for a tricky/complex pass, or just toggle individual items below.</span>
   </label>
+
+  <div class="screenshot-hint">
+    📷 To attach a screenshot: take one with <code>Cmd+Shift+Ctrl+4</code> (copies to
+    your clipboard), then click into any note field below and paste with <code>Cmd+V</code>.
+  </div>
 
   <div id="groups"></div>
 
