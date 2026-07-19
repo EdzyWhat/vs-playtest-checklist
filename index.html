@@ -160,6 +160,46 @@
   }
   .item-detail-toggle:hover { border-color: var(--accent); color: var(--text); }
   .item-detail-toggle.active { background: var(--accent); color: #0a0a0a; border-color: var(--accent); }
+  .screenshot-btn { white-space: nowrap; }
+  .screenshots {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .screenshots:empty { margin-top: 0; }
+  .screenshot-thumb {
+    position: relative;
+    width: 72px;
+    height: 72px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .screenshot-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    cursor: pointer;
+    display: block;
+  }
+  .screenshot-remove {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 18px;
+    height: 18px;
+    line-height: 16px;
+    text-align: center;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: #000000cc;
+    color: var(--text);
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .screenshot-remove:hover { background: var(--fail); color: #0a0a0a; }
   /* Default (simple mode): show the single freeform note, hide expected/actual.
      Detailed can be turned on globally (body.detailed-mode, every item) or per item
      (.item.detailed, that item only, independent of the global setting). */
@@ -217,7 +257,8 @@
 
   <div class="notes-section">
     <label for="generalNotes">Anything else worth flagging (general notes, not tied to one item)</label>
-    <textarea id="generalNotes" placeholder="Optional..." title="Anything that doesn't fit a specific checklist item -- a new bug you noticed, a question worth flagging, general impressions."></textarea>
+    <textarea id="generalNotes" placeholder="Optional... paste a screenshot here with ⌘V" title="Anything that doesn't fit a specific checklist item -- a new bug you noticed, a question worth flagging, general impressions. Paste (⌘V) a clipboard image to attach a screenshot."></textarea>
+    <div id="generalScreenshots" class="screenshots"></div>
   </div>
 
   <div class="submit-bar">

@@ -32,6 +32,28 @@ Endpoints:
                              from real evidence), so a submission here is a claim/report
                              queued for review, not an authoritative confirmation on its
                              own.
+    POST /api/screenshot?fingerprint=<id> -> body is the raw image bytes (paste target
+                             on the page uploads immediately, not held until Submit).
+                             Written to
+                             <project-root>/.playtest-submissions/screenshots/
+                             <timestamp>-<fingerprint>[-N].<ext>. Returns
+                             {"ok": true, "file": "<name>"} (bare filename, relative to
+                             that screenshots/ dir); the page stores it on the item and
+                             includes it in the submitted report JSON, and can re-fetch
+                             it for a thumbnail via GET /api/screenshots/<name> below --
+                             an agent reviewing the report can open the file directly
+                             instead of unpacking a blob.
+    GET  /api/screenshots/<name> -> serves a previously-uploaded screenshot back
+                             (thumbnail preview on the page). Bare filename only --
+                             rejects anything containing a path separator.
+    POST /api/capture    -> runs macOS's `screencapture -i -c` on the server (blocking
+                             until the user drags a selection or hits Escape), leaving
+                             the result on the system clipboard -- an alternative to the
+                             user remembering the Cmd+Shift+Ctrl+4 shortcut themselves.
+                             Does not upload anything itself; the user still pastes
+                             (Cmd+V) into an item's note field afterward, same as a
+                             manually-taken screenshot. macOS-only; returns 500 on other
+                             platforms.
 
 Deliberately stdlib-only, no build tooling -- this is a tiny local tool, not a shipped
 app.
@@ -39,10 +61,13 @@ app.
 import argparse
 import http.server
 import json
+import mimetypes
 import os
 import re
+import subprocess
 import sys
 import time
+import urllib.parse
 
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -50,6 +75,22 @@ ITEM_RE = re.compile(r"^- \[( |x)\] `([0-9a-f]{8})` (.*)$")
 HEADING_RE = re.compile(r"^## (.+)$")
 ANNOTATION_START_RE = re.compile(r"^\s+- \*\*(Confirmed|Still broken)([^*]*)\*\*:?\s*(.*)$")
 TASK_ID_SUFFIX_RE = re.compile(r"\s*\*\(([^)]+)\)\*\s*$")
+
+# Loose on purpose: real fingerprints are 8 hex chars, but "general" notes (not tied to
+# a specific item) use this literal token instead -- both are safe to embed in a
+# filename.
+FINGERPRINT_RE = re.compile(r"^[0-9a-f]{8}$|^general$")
+
+MAX_SCREENSHOT_BYTES = 20 * 1024 * 1024  # generous cap; a paste is a single screen grab
+
+# Clipboard image paste in a browser is essentially always PNG, but keep a couple of
+# other sane defaults in case a browser/OS ever hands over something else.
+CONTENT_TYPE_TO_EXT = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
 
 
 def find_testing_file_upward(start_dir):
@@ -196,10 +237,49 @@ def make_handler(testing_file_path):
             if self.path == "/api/checklist":
                 self._send_json(200, {"groups": parse_testing_md(testing_file_path)})
                 return
+            parsed_url = urllib.parse.urlparse(self.path)
+            if parsed_url.path.startswith("/api/screenshots/"):
+                self._serve_screenshot(parsed_url)
+                return
             super().do_GET()
 
+        def _serve_screenshot(self, parsed_url):
+            # Screenshots live under the *project's* .playtest-submissions/, outside
+            # this tool's own static directory (TOOL_DIR) that SimpleHTTPRequestHandler
+            # otherwise serves from -- so they need their own small static handler
+            # rather than falling through to super().do_GET().
+            if not submissions_dir:
+                self._send_json(404, {"error": "not found"})
+                return
+            filename = urllib.parse.unquote(parsed_url.path[len("/api/screenshots/"):])
+            # Reject anything that isn't a plain filename -- no path traversal via "..",
+            # no absolute paths, no nested directories.
+            if not filename or "/" in filename or "\\" in filename or filename in (".", ".."):
+                self._send_json(400, {"error": "invalid filename"})
+                return
+            screenshots_dir = os.path.join(submissions_dir, "screenshots")
+            path = os.path.join(screenshots_dir, filename)
+            if not os.path.isfile(path):
+                self._send_json(404, {"error": "not found"})
+                return
+            content_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
+            with open(path, "rb") as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
         def do_POST(self):
-            if self.path != "/api/submit":
+            parsed_url = urllib.parse.urlparse(self.path)
+            if parsed_url.path == "/api/capture":
+                self._handle_capture()
+                return
+            if parsed_url.path == "/api/screenshot":
+                self._handle_screenshot(parsed_url)
+                return
+            if parsed_url.path != "/api/submit":
                 self._send_json(404, {"error": "not found"})
                 return
 
@@ -234,6 +314,83 @@ def make_handler(testing_file_path):
                 json.dump(parsed, f, indent=2)
 
             self._send_json(200, {"ok": True, "file": os.path.basename(path)})
+
+        def _handle_capture(self):
+            """Runs macOS's own interactive screenshot-to-clipboard tool server-side, so
+            the page can offer a "Take screenshot" button as an alternative to the user
+            remembering Cmd+Shift+Ctrl+4 themselves. Blocks (this handler runs on its own
+            thread -- see ThreadingHTTPServer below) until the user finishes dragging a
+            selection or cancels with Escape. Deliberately leaves the result on the
+            clipboard rather than uploading it directly: pasting into a note field stays
+            the one attach path, so a button-triggered capture behaves identically to a
+            manual one."""
+            try:
+                result = subprocess.run(
+                    ["screencapture", "-i", "-c"], timeout=120
+                )
+            except FileNotFoundError:
+                self._send_json(500, {
+                    "error": "screencapture not found -- this button only works on macOS",
+                })
+                return
+            except subprocess.TimeoutExpired:
+                self._send_json(408, {"error": "screenshot selection timed out"})
+                return
+
+            if result.returncode != 0:
+                # Most commonly: the user pressed Escape to cancel the selection.
+                self._send_json(200, {"ok": False, "cancelled": True})
+                return
+
+            self._send_json(200, {"ok": True})
+
+        def _handle_screenshot(self, parsed_url):
+            if not submissions_dir:
+                self._send_json(400, {
+                    "error": "no TESTING.md resolved -- nothing to attach a screenshot to",
+                })
+                return
+
+            qs = urllib.parse.parse_qs(parsed_url.query)
+            fingerprint = (qs.get("fingerprint") or [None])[0] or "general"
+            if not FINGERPRINT_RE.match(fingerprint):
+                self._send_json(400, {"error": "invalid fingerprint"})
+                return
+
+            length = int(self.headers.get("Content-Length", 0))
+            if length <= 0:
+                self._send_json(400, {"error": "empty body"})
+                return
+            if length > MAX_SCREENSHOT_BYTES:
+                self._send_json(413, {"error": "screenshot too large"})
+                return
+            raw = self.rfile.read(length)
+
+            content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            ext = CONTENT_TYPE_TO_EXT.get(content_type) or mimetypes.guess_extension(content_type) or ".png"
+
+            screenshots_dir = os.path.join(submissions_dir, "screenshots")
+            os.makedirs(screenshots_dir, exist_ok=True)
+            timestamp = time.strftime("%Y-%m-%dT%H-%M-%S")
+            base = f"{timestamp}-{fingerprint}"
+            filename = f"{base}{ext}"
+            path = os.path.join(screenshots_dir, filename)
+            # Same same-second collision guard as /api/submit -- e.g. two quick pastes
+            # onto different items within one second.
+            suffix = 2
+            while os.path.exists(path):
+                filename = f"{base}-{suffix}{ext}"
+                path = os.path.join(screenshots_dir, filename)
+                suffix += 1
+
+            with open(path, "wb") as f:
+                f.write(raw)
+
+            # "file" is a bare filename (relative to .playtest-submissions/screenshots/),
+            # servable back to the page at GET /api/screenshots/<file> and, in the
+            # submitted report JSON, resolvable by an agent as
+            # <project>/.playtest-submissions/screenshots/<file>.
+            self._send_json(200, {"ok": True, "file": filename})
 
     return Handler
 
