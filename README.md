@@ -80,6 +80,12 @@ sync, no second copy of the repo. The agent reads them the moment you hit Submit
 python3 server.py --testing-file /path/to/project/TESTING.md --lan
 ```
 
+Or double-click **`start-lan.command`** — the LAN counterpart to `start.command`, with
+the project path and a fixed token pinned inside it, so this is a double-click rather
+than a pasted command. Edit the `TESTING_FILE`/`TOKEN` variables near the top to
+retarget or rotate the secret. (It prints the URL but does not open a browser here — the
+page is meant to be opened on the *other* machine.)
+
 `--lan` binds all network interfaces (instead of localhost-only) and prints a URL and an
 access token to open on the other machine, e.g.:
 
