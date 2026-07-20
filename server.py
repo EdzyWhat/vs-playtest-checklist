@@ -8,13 +8,24 @@ at any project's TESTING.md via --testing-file, or run it with your shell's cwd 
 a project root that has one (it searches upward from cwd, the way `git` finds `.git`).
 
 Usage:
-    python3 server.py [--testing-file PATH] [--port PORT]
+    python3 server.py [--testing-file PATH] [--port PORT] [--lan] [--token TOKEN]
 
     # From within a project root that has TESTING.md:
     python3 /path/to/vs-playtest-checklist/server.py
 
     # Or point it explicitly at another project:
     python3 server.py --testing-file ~/some-other-project/TESTING.md
+
+    # Serve to another computer on the same network (prints a URL + access token to
+    # open there). Binds all interfaces and requires a token on /api/* requests; plain
+    # localhost use is unchanged and needs no token.
+    python3 server.py --lan
+
+By default the server binds localhost only. --lan binds all interfaces so another
+machine on the same network can run the checklist in its browser and submit reports
+straight back into this project's .playtest-submissions/ (no sync). Because that opens
+the write endpoints to the network, --lan auto-generates a shared token that every
+/api/* request must carry (in the ?token= query param or an X-Playtest-Token header).
 
 Endpoints:
     GET  /api/meta       -> {"projectName": ..., "testingFilePath": ..., "found": bool}
@@ -56,6 +67,8 @@ import json
 import mimetypes
 import os
 import re
+import secrets
+import socket
 import sys
 import time
 import urllib.parse
@@ -192,7 +205,7 @@ def parse_testing_md(testing_file_path):
     return groups
 
 
-def make_handler(testing_file_path):
+def make_handler(testing_file_path, token=None):
     submissions_dir = None
     if testing_file_path:
         submissions_dir = os.path.join(os.path.dirname(testing_file_path), ".playtest-submissions")
@@ -209,6 +222,20 @@ def make_handler(testing_file_path):
             self.send_header("Cache-Control", "no-store")
             super().end_headers()
 
+        def _token_ok(self):
+            # When no token is configured (plain localhost use), everything is allowed --
+            # this is a no-op and existing local usage is unaffected. When a token IS set
+            # (LAN mode), every /api/* request must present it, either as a `token` query
+            # param (so a pasted URL just works on the other machine) or an
+            # X-Playtest-Token header. Only the /api/* surfaces are gated; the static
+            # shell (index.html/app.js) stays open since gating it buys no security --
+            # the sensitive reads/writes all live under /api/.
+            if not token:
+                return True
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            supplied = (qs.get("token") or [None])[0] or self.headers.get("X-Playtest-Token")
+            return bool(supplied) and secrets.compare_digest(supplied, token)
+
         def _send_json(self, status, payload):
             body = json.dumps(payload).encode("utf-8")
             self.send_response(status)
@@ -218,18 +245,28 @@ def make_handler(testing_file_path):
             self.wfile.write(body)
 
         def do_GET(self):
-            if self.path == "/api/meta":
+            # Compare against the path WITHOUT the query string -- the token travels as a
+            # ?token= param, so an exact `self.path == "/api/checklist"` match would miss
+            # once a token is appended. Static requests fall through to super().do_GET(),
+            # which reads self.path itself.
+            parsed_url = urllib.parse.urlparse(self.path)
+            path = parsed_url.path
+            # Gate the data endpoints (checklist contents, screenshots) but leave the
+            # static app shell open -- see _token_ok.
+            if path.startswith("/api/") and not self._token_ok():
+                self._send_json(401, {"error": "missing or invalid token"})
+                return
+            if path == "/api/meta":
                 self._send_json(200, {
                     "projectName": project_name,
                     "testingFilePath": testing_file_path,
                     "found": bool(testing_file_path and os.path.isfile(testing_file_path)),
                 })
                 return
-            if self.path == "/api/checklist":
+            if path == "/api/checklist":
                 self._send_json(200, {"groups": parse_testing_md(testing_file_path)})
                 return
-            parsed_url = urllib.parse.urlparse(self.path)
-            if parsed_url.path.startswith("/api/screenshots/"):
+            if path.startswith("/api/screenshots/"):
                 self._serve_screenshot(parsed_url)
                 return
             super().do_GET()
@@ -264,6 +301,9 @@ def make_handler(testing_file_path):
 
         def do_POST(self):
             parsed_url = urllib.parse.urlparse(self.path)
+            if parsed_url.path.startswith("/api/") and not self._token_ok():
+                self._send_json(401, {"error": "missing or invalid token"})
+                return
             if parsed_url.path == "/api/screenshot":
                 self._handle_screenshot(parsed_url)
                 return
@@ -354,10 +394,29 @@ def make_handler(testing_file_path):
     return Handler
 
 
+def lan_ip():
+    """Best-effort LAN IP for this machine, printed so the other computer can connect
+    even when mDNS (<host>.local) doesn't resolve. Uses the standard UDP-connect trick:
+    no packets are actually sent -- connect() on a datagram socket just picks the
+    outbound interface, and getsockname() reads back its address. Works offline; falls
+    back to loopback if there's no route at all."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("192.0.2.1", 1))  # TEST-NET-1: guaranteed-unroutable, just for interface selection
+        return s.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--testing-file", help="Path to a project's TESTING.md. Defaults to searching upward from the current directory.")
     parser.add_argument("--port", type=int, default=8792)
+    parser.add_argument("--lan", action="store_true", help="Bind to all interfaces so another computer on the same network can reach it. Auto-generates an access token unless --token is given. macOS shows a one-time firewall prompt -- click Allow.")
+    parser.add_argument("--host", help="Explicit bind address (advanced; overrides --lan's 0.0.0.0). Default is localhost.")
+    parser.add_argument("--token", help="Shared secret required on /api/* requests. Defaults to a random token when --lan is set, or none for localhost-only use.")
     args = parser.parse_args()
 
     testing_file_path = (
@@ -372,9 +431,33 @@ def main():
     else:
         print(f"Serving checklist from: {testing_file_path}")
 
-    handler = make_handler(testing_file_path)
-    server = http.server.ThreadingHTTPServer(("localhost", args.port), handler)
-    print(f"playtest checklist running at http://localhost:{args.port}/index.html")
+    # Bind address: localhost by default (safe), all-interfaces when serving to the LAN.
+    bind_host = args.host if args.host else ("0.0.0.0" if args.lan else "localhost")
+    # A token is auto-generated for LAN use (write endpoints are otherwise unauthenticated)
+    # but never forced on plain localhost use, which stays a zero-config open tool.
+    token = args.token or (secrets.token_urlsafe(16) if args.lan else None)
+
+    handler = make_handler(testing_file_path, token=token)
+    server = http.server.ThreadingHTTPServer((bind_host, args.port), handler)
+
+    query = f"?token={token}" if token else ""
+    if bind_host in ("localhost", "127.0.0.1"):
+        print(f"playtest checklist running at http://localhost:{args.port}/index.html{query}")
+    else:
+        # Print both the mDNS name and the raw IP -- open the .local one on the other
+        # machine first; fall back to the IP if Bonjour/mDNS doesn't resolve there.
+        hostname = socket.gethostname()
+        if not hostname.endswith(".local"):
+            hostname = hostname.split(".")[0] + ".local"
+        ip = lan_ip()
+        print(f"playtest checklist running on the LAN (bound to {bind_host}:{args.port})")
+        print("Open on the other computer (try the name first, fall back to the IP):")
+        print(f"  http://{hostname}:{args.port}/index.html{query}")
+        print(f"  http://{ip}:{args.port}/index.html{query}")
+        if token:
+            print(f"Access token: {token}")
+        print("Note: macOS may show a one-time firewall prompt for Python -- click Allow.")
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:

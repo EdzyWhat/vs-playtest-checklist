@@ -67,6 +67,47 @@ Then open http://localhost:8792/index.html (or whatever `--port` you passed).
 needed and open the page automatically. Make a Finder alias to it if you want one-click
 access from the Dock/Launcher folder.
 
+## Running it on another computer (same network)
+
+Playtesting on a second machine (say, a Windows box next to your Mac) while an agent on
+the first machine does the bug-fixing: run the server on the machine that has the project
+(and the agent), and open the checklist in a browser on the *other* machine. Reports
+submit straight back into the project's `.playtest-submissions/` on the host machine — no
+sync, no second copy of the repo. The agent reads them the moment you hit Submit.
+
+```bash
+# On the machine that has the project + the agent:
+python3 server.py --testing-file /path/to/project/TESTING.md --lan
+```
+
+`--lan` binds all network interfaces (instead of localhost-only) and prints a URL and an
+access token to open on the other machine, e.g.:
+
+```
+Open on the other computer (try the name first, fall back to the IP):
+  http://my-mac.local:8792/index.html?token=jr8_63vDyOF7qratklGIZw
+  http://192.168.1.42:8792/index.html?token=jr8_63vDyOF7qratklGIZw
+```
+
+- **Token:** because `--lan` opens the report-writing endpoints to the network, every
+  `/api/*` request must carry a shared token. It's auto-generated and baked into the URL
+  above (so you just open the link), or set your own with `--token`. Plain localhost use
+  needs no token and is unchanged.
+- **Which URL:** try the `.local` name first (works via Bonjour/mDNS, which Windows 10+
+  resolves); fall back to the raw IP if it doesn't. The printed IP is a best guess — if
+  the host has a VPN/Tailscale interface it may print that address instead of your Wi-Fi
+  `192.168.x.x`; use the `.local` name or your real LAN IP (`ipconfig getifaddr en0` on
+  macOS) in that case.
+- **macOS firewall:** the first `--lan` launch triggers a one-time "allow incoming
+  connections" prompt for Python — click **Allow**, or the other machine can't connect.
+- **If the network blocks peer-to-peer traffic** (some corporate/guest Wi-Fi has "client
+  isolation"), install [Tailscale](https://tailscale.com/) on both machines and use the
+  Mac's Tailscale IP + `--lan` instead — same result over a private mesh.
+
+Security note: the token guards against other devices on the network, but it does travel
+in the URL (so it can land in the Windows browser's history). This is a home-LAN dev
+tool, not an internet-facing service — don't expose it to the public internet.
+
 ## Where submissions go
 
 Submitting a report writes a JSON file to `.playtest-submissions/` **inside the

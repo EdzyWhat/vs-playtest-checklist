@@ -21,6 +21,17 @@ const generalNotesEl = document.getElementById("generalNotes");
 const detailedModeEl = document.getElementById("detailedMode");
 const generalScreenshotsEl = document.getElementById("generalScreenshots");
 
+// When served over the LAN the server requires a token on /api/* requests (see
+// server.py's --lan mode). It's carried in the page URL (?token=...), so we read it once
+// here and re-attach it to every API call. Empty for plain localhost use, where apiUrl()
+// leaves URLs untouched and no token is required. Relative URLs mean the page never needs
+// to know its own host -- fetches resolve against whatever machine served the page.
+const API_TOKEN = new URLSearchParams(location.search).get("token") || "";
+function apiUrl(path) {
+  if (!API_TOKEN) return path;
+  return path + (path.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(API_TOKEN);
+}
+
 const DETAILED_MODE_KEY = "playtest-checklist-detailed-mode";
 // Collapsed groups are fully manual (no auto-collapse based on progress) and persist by
 // group *name*, not position -- so reordering/editing TESTING.md elsewhere doesn't
@@ -107,7 +118,7 @@ function formatItemText(text) {
 
 async function loadMeta() {
   try {
-    const res = await fetch("/api/meta");
+    const res = await fetch(apiUrl("/api/meta"));
     const data = await res.json();
     if (data.projectName) {
       pageTitleEl.textContent = `${data.projectName} — Playtest checklist`;
@@ -383,7 +394,7 @@ function renderGroups(groups, metaFound) {
 // visual confirmation the attach worked.
 async function uploadScreenshot(target, blob) {
   try {
-    const res = await fetch(`/api/screenshot?fingerprint=${encodeURIComponent(target.fingerprint)}`, {
+    const res = await fetch(apiUrl(`/api/screenshot?fingerprint=${encodeURIComponent(target.fingerprint)}`), {
       method: "POST",
       headers: { "Content-Type": blob.type || "image/png" },
       body: blob,
@@ -402,7 +413,7 @@ function renderScreenshotThumbnail(target, filename) {
   thumbEl.className = "screenshot-thumb";
 
   const img = document.createElement("img");
-  img.src = `/api/screenshots/${encodeURIComponent(filename)}`;
+  img.src = apiUrl(`/api/screenshots/${encodeURIComponent(filename)}`);
   img.alt = filename;
   img.title = "Click to open full size";
   img.addEventListener("click", () => window.open(img.src, "_blank"));
@@ -456,7 +467,7 @@ attachPasteHandler(generalNotesEl, generalTarget);
 async function load() {
   const meta = await loadMeta();
   try {
-    const res = await fetch("/api/checklist");
+    const res = await fetch(apiUrl("/api/checklist"));
     const data = await res.json();
     loadedGroups = data.groups || [];
     renderGroups(loadedGroups, meta.found);
@@ -513,7 +524,7 @@ submitBtn.addEventListener("click", async () => {
   submitBtn.disabled = true;
   statusEl.textContent = "Submitting...";
   try {
-    const res = await fetch("/api/submit", {
+    const res = await fetch(apiUrl("/api/submit"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(report),
