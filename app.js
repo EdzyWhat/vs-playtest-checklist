@@ -13,6 +13,7 @@
 // An item is rendered as detailed if EITHER is on -- see isItemDetailed().
 
 const pageTitleEl = document.getElementById("pageTitle");
+const tocEl = document.getElementById("toc");
 const groupsEl = document.getElementById("groups");
 const submitBtn = document.getElementById("submitBtn");
 const statusEl = document.getElementById("status");
@@ -21,6 +22,40 @@ const detailedModeEl = document.getElementById("detailedMode");
 const generalScreenshotsEl = document.getElementById("generalScreenshots");
 
 const DETAILED_MODE_KEY = "playtest-checklist-detailed-mode";
+// Collapsed groups are fully manual (no auto-collapse based on progress) and persist by
+// group *name*, not position -- so reordering/editing TESTING.md elsewhere doesn't
+// silently reset what you'd already tucked away. Stored as an array of names rather
+// than one key per group so there's a single localStorage entry to reason about.
+const COLLAPSED_GROUPS_KEY = "playtest-checklist-collapsed-groups";
+
+function loadCollapsedGroups() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(COLLAPSED_GROUPS_KEY) || "[]"));
+  } catch (err) {
+    return new Set();
+  }
+}
+
+function saveCollapsedGroups(set) {
+  localStorage.setItem(COLLAPSED_GROUPS_KEY, JSON.stringify([...set]));
+}
+
+const collapsedGroups = loadCollapsedGroups();
+
+// Turns a group heading into a stable id for anchor links (`#group-...`). Two groups
+// with the same name (unusual, but TESTING.md doesn't forbid it) get distinct ids by
+// suffixing the second occurrence, so anchors/collapse-state never collide silently.
+function slugifyGroupName(name, seenSlugs) {
+  const base = "group-" + name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  let slug = base;
+  let n = 2;
+  while (seenSlugs.has(slug)) {
+    slug = `${base}-${n}`;
+    n += 1;
+  }
+  seenSlugs.add(slug);
+  return slug;
+}
 
 let loadedGroups = [];
 
@@ -55,6 +90,21 @@ function escapeHtml(str) {
   }[c]));
 }
 
+// Optional convention (see this repo's README / the authoring skill that writes
+// TESTING.md): an item's text may lead with a `**Up to four words.**` summary -- a
+// quick "what to actually do" flag before the fuller description. Purely a rendering
+// treatment (bold + slight size bump on that fragment); items without it render exactly
+// as before. Escape first, then re-inject the one bit of markup we allow, so this never
+// opens an HTML-injection path via TESTING.md content.
+const LEAD_IN_RE = /^\*\*([^*]+)\*\*\s*/;
+
+function formatItemText(text) {
+  const escaped = escapeHtml(text);
+  const match = escaped.match(LEAD_IN_RE);
+  if (!match) return escaped;
+  return `<strong class="item-lead-in">${match[1]}</strong> ${escaped.slice(match[0].length)}`;
+}
+
 async function loadMeta() {
   try {
     const res = await fetch("/api/meta");
@@ -69,6 +119,31 @@ async function loadMeta() {
   }
 }
 
+// Pinned rail on the right edge of the viewport (see .toc in index.html): collapsed,
+// it's just one small tick per group; hovering anywhere over the rail expands a panel
+// with the full clickable list. Skipped entirely for a single-group checklist -- one
+// tick/link would just repeat the one heading already visible below.
+function renderToc(groups, groupSlugs) {
+  if (groups.length < 2) {
+    tocEl.innerHTML = "";
+    tocEl.style.display = "none";
+    return;
+  }
+  tocEl.style.display = "";
+  const ticks = groups.map(() => `<div class="toc-tick"></div>`).join("");
+  const items = groups.map((group, i) => {
+    const confirmed = group.items.filter((it) => it.annotation && it.annotation.kind === "confirmed").length;
+    const subItems = group.items.map((item) => {
+      // Tooltip shows the plain text (lead-in markers stripped) since a title attribute
+      // can't render the bolding formatItemText applies to the visible link text.
+      const plainText = item.text.replace(LEAD_IN_RE, "$1 — ");
+      return `<li class="toc-subitem"><a href="#item-${item.fingerprint}" title="${escapeHtml(plainText)}">${formatItemText(item.text)}</a></li>`;
+    }).join("");
+    return `<li><a href="#${groupSlugs[i]}" class="toc-group-link">${escapeHtml(group.name)}</a><span class="count">${confirmed}/${group.items.length}</span><ul class="toc-subitems">${subItems}</ul></li>`;
+  }).join("");
+  tocEl.innerHTML = `${ticks}<div class="toc-panel"><div class="toc-title">Jump to</div><ul>${items}</ul></div>`;
+}
+
 function renderGroups(groups, metaFound) {
   groupsEl.innerHTML = "";
 
@@ -77,20 +152,56 @@ function renderGroups(groups, metaFound) {
       ? "No TESTING.md found. Run this from a project root that has one, or pass --testing-file to server.py."
       : "TESTING.md has no items yet.";
     groupsEl.innerHTML = `<div class="empty">${escapeHtml(message)}</div>`;
+    tocEl.innerHTML = "";
+    tocEl.style.display = "none";
     submitBtn.disabled = true;
     return;
   }
 
-  for (const group of groups) {
+  const seenSlugs = new Set();
+  const groupSlugs = groups.map((group) => slugifyGroupName(group.name, seenSlugs));
+  renderToc(groups, groupSlugs);
+
+  groups.forEach((group, groupIndex) => {
     const groupEl = document.createElement("div");
-    groupEl.className = "group";
+    const slug = groupSlugs[groupIndex];
+    groupEl.id = slug;
+    groupEl.className = "group" + (collapsedGroups.has(group.name) ? " collapsed" : "");
+
+    const headerEl = document.createElement("div");
+    headerEl.className = "group-header";
+    headerEl.title = "Click to collapse/expand this section (remembered next time you open the checklist).";
+
+    const chevron = document.createElement("span");
+    chevron.className = "group-chevron";
+    chevron.textContent = "▾";
+    headerEl.appendChild(chevron);
+
     const heading = document.createElement("h2");
     heading.textContent = group.name;
-    groupEl.appendChild(heading);
+    headerEl.appendChild(heading);
+
+    const confirmedCount = group.items.filter((it) => it.annotation && it.annotation.kind === "confirmed").length;
+    const countEl = document.createElement("span");
+    countEl.className = "group-count";
+    countEl.textContent = `${confirmedCount}/${group.items.length}`;
+    headerEl.appendChild(countEl);
+
+    headerEl.addEventListener("click", () => {
+      const nowCollapsed = !groupEl.classList.contains("collapsed");
+      groupEl.classList.toggle("collapsed", nowCollapsed);
+      if (nowCollapsed) collapsedGroups.add(group.name);
+      else collapsedGroups.delete(group.name);
+      saveCollapsedGroups(collapsedGroups);
+    });
+    groupEl.appendChild(headerEl);
 
     for (const item of group.items) {
       const itemEl = document.createElement("div");
       itemEl.className = "item" + (item.annotation ? " already-confirmed" : "");
+      // Anchor target for the TOC panel's per-item sub-links (see renderToc) -- keyed by
+      // fingerprint since it's already guaranteed unique and stable across re-renders.
+      itemEl.id = `item-${item.fingerprint}`;
       itemEl.dataset.fingerprint = item.fingerprint;
       itemEl.dataset.taskId = item.taskId || "";
       itemEl.dataset.text = item.text;
@@ -112,7 +223,7 @@ function renderGroups(groups, metaFound) {
 
       const textEl = document.createElement("div");
       textEl.className = "item-text";
-      textEl.innerHTML = `${escapeHtml(item.text)} <code>${item.fingerprint}</code>`;
+      textEl.innerHTML = `${formatItemText(item.text)} <code>${item.fingerprint}</code>`;
       topEl.appendChild(textEl);
 
       const detailToggleBtn = document.createElement("button");
@@ -204,7 +315,7 @@ function renderGroups(groups, metaFound) {
     }
 
     groupsEl.appendChild(groupEl);
-  }
+  });
 }
 
 // A "target" is either a checklist item (fingerprint = item's own fingerprint,

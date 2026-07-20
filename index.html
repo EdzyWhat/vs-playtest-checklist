@@ -29,13 +29,133 @@
   h1 { font-size: 1.4rem; margin-bottom: 4px; }
   .sub { color: var(--dim); font-size: 0.85rem; margin-bottom: 28px; }
   .group { margin-bottom: 28px; }
-  .group h2 {
-    font-size: 0.95rem;
-    color: var(--accent);
+  .group-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     border-bottom: 1px solid var(--border);
     padding-bottom: 6px;
     margin-bottom: 12px;
+    cursor: pointer;
+    user-select: none;
   }
+  .group-header:hover h2 { color: var(--text); }
+  .group-chevron {
+    flex-shrink: 0;
+    font-size: 1.5rem;
+    color: var(--dim);
+    transition: transform 0.15s;
+  }
+  .group.collapsed .group-chevron { transform: rotate(-90deg); }
+  .group.collapsed .item { display: none; }
+  .group h2 {
+    font-size: 0.95rem;
+    color: var(--accent);
+    margin: 0;
+  }
+  .group-count {
+    font-size: 0.75rem;
+    color: var(--dim);
+    margin-left: auto;
+    white-space: nowrap;
+  }
+  /* Pinned to the right edge of the viewport (not the content column) so it stays
+     reachable no matter how far down the page you've scrolled. Collapsed, it's just a
+     thin rail of ticks -- one per group, proportionally spaced down the page like a
+     scrollbar -- so it doesn't compete with the checklist for attention. Hovering
+     expands it into the full readable/clickable list; nothing else on the page shifts,
+     since it's fixed/floating rather than participating in layout. */
+  .toc {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 28px;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-end;
+    gap: 10px;
+    padding: 16px 10px;
+  }
+  .toc-tick {
+    width: 10px;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--border);
+    margin-left: auto;
+    transition: background 0.15s, width 0.15s;
+  }
+  .toc:hover .toc-tick { background: var(--accent); width: 16px; }
+  .toc-panel {
+    position: absolute;
+    top: 50%;
+    right: 16px;
+    transform: translateY(-50%);
+    min-width: 120px;
+    max-width: 260px;
+    max-height: 80vh;
+    overflow-y: auto;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    box-shadow: 0 4px 20px #00000066;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.12s;
+  }
+  .toc:hover .toc-panel { opacity: 1; pointer-events: auto; }
+  .toc-title {
+    font-size: 0.72rem;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    margin-bottom: 8px;
+  }
+  .toc-panel > ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .toc-group-link {
+    color: var(--text);
+    text-decoration: none;
+    font-size: 0.85rem;
+  }
+  .toc-group-link:hover { color: var(--accent); }
+  .toc-panel li > .count {
+    color: var(--dim);
+    font-size: 0.75rem;
+    white-space: nowrap;
+    margin-left: 6px;
+  }
+  /* Each group's own items, indented and truncated to a single line -- a peek at
+     what's inside without blowing up the panel's height for a checklist with many
+     items per group. */
+  .toc-subitems {
+    list-style: none;
+    margin: 4px 0 0;
+    padding: 0 0 0 12px;
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .toc-subitem a {
+    display: block;
+    color: var(--dim);
+    text-decoration: none;
+    font-size: 0.72rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .toc-subitem a:hover { color: var(--accent); }
   .item {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -52,6 +172,10 @@
     margin-bottom: 8px;
   }
   .item-text { font-size: 0.92rem; line-height: 1.4; flex: 1; }
+  .item-lead-in {
+    font-size: 1rem;
+    color: var(--text);
+  }
   .item-text code {
     background: #000000aa;
     padding: 1px 5px;
@@ -267,6 +391,8 @@
     📷 To attach a screenshot: take one with <code>Cmd+Shift+Ctrl+4</code> (copies to
     your clipboard), then click into any note field below and paste with <code>Cmd+V</code>.
   </div>
+
+  <div id="toc" class="toc"></div>
 
   <div id="groups"></div>
 

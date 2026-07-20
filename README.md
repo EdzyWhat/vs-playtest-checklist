@@ -27,7 +27,7 @@ reporter/tester claims a result, someone else verifies before closing it out.
 
 ## some-feature-area
 
-- [ ] `7d808ca9` Do the thing and confirm X happens. *(3.5)*
+- [ ] `7d808ca9` **Scroll the lectern.** Do the thing and confirm X happens. *(3.5)*
 - [x] `805e78a7` Do the other thing and confirm Y. *(6.6)*
       - **Confirmed 2026-07-19** via screenshot: caret held after hover.
 ```
@@ -39,6 +39,14 @@ reporter/tester claims a result, someone else verifies before closing it out.
 - A checked box only "counts" if there's a `**Confirmed ...**` (or `**Still broken
   ...**`) annotation underneath it. A bare `[x]` with no annotation is not treated as
   confirmed by design.
+- **Optional:** an item's description may lead with a `**Up to four words.**` summary —
+  a quick "what to actually do" flag before the fuller description (see
+  `7d808ca9` above). The checklist page renders that fragment bolded and strips the
+  `**` markers; items without it render exactly as plain text. This is purely a
+  rendering convention this app understands — nothing upstream (parsing,
+  fingerprinting, confirmation) treats it specially. Whatever agent/skill authors a
+  project's `TESTING.md` decides whether to write these lead-ins; keep them imperative
+  and concrete (`Scroll the lectern`, not `Verify that scrolling works correctly`).
 
 ## Running it
 
