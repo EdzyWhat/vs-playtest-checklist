@@ -130,7 +130,7 @@ function renderToc(groups, groupSlugs) {
     return;
   }
   tocEl.style.display = "";
-  const ticks = groups.map(() => `<div class="toc-tick"></div>`).join("");
+  const ticks = groups.map((_, i) => `<div class="toc-tick" data-group-index="${i}"></div>`).join("");
   const items = groups.map((group, i) => {
     const confirmed = group.items.filter((it) => it.annotation && it.annotation.kind === "confirmed").length;
     const subItems = group.items.map((item) => {
@@ -139,9 +139,58 @@ function renderToc(groups, groupSlugs) {
       const plainText = item.text.replace(LEAD_IN_RE, "$1 — ");
       return `<li class="toc-subitem"><a href="#item-${item.fingerprint}" title="${escapeHtml(plainText)}">${formatItemText(item.text)}</a></li>`;
     }).join("");
-    return `<li><a href="#${groupSlugs[i]}" class="toc-group-link">${escapeHtml(group.name)}</a><span class="count">${confirmed}/${group.items.length}</span><ul class="toc-subitems">${subItems}</ul></li>`;
+    return `<li><a href="#${groupSlugs[i]}" class="toc-group-link" data-group-index="${i}">${escapeHtml(group.name)}</a><span class="count">${confirmed}/${group.items.length}</span><ul class="toc-subitems">${subItems}</ul></li>`;
   }).join("");
   tocEl.innerHTML = `${ticks}<div class="toc-panel"><div class="toc-title">Jump to</div><ul>${items}</ul></div>`;
+}
+
+// Scroll-spy: keep the rail's active tick (and the panel's active link) in sync with
+// whichever group is currently in view, so the collapsed rail reads as a "you are here"
+// indicator, not just a jump list. An IntersectionObserver tracks each group heading;
+// the topmost group that's intersecting the viewport wins. Re-created on every
+// renderToc since the group set (and their DOM nodes) can change on re-render.
+let tocObserver = null;
+function observeGroupsForToc(groupSlugs) {
+  if (tocObserver) tocObserver.disconnect();
+
+  const setActive = (index) => {
+    tocEl.querySelectorAll(".toc-tick.active, .toc-group-link.active")
+      .forEach((el) => el.classList.remove("active"));
+    if (index == null) return;
+    const tick = tocEl.querySelector(`.toc-tick[data-group-index="${index}"]`);
+    const link = tocEl.querySelector(`.toc-group-link[data-group-index="${index}"]`);
+    if (tick) tick.classList.add("active");
+    if (link) link.classList.add("active");
+  };
+
+  // Track visibility per group so we can always pick the topmost visible one, rather
+  // than react to whichever entry fired last (which flip-flops when scrolling fast).
+  const visible = new Set();
+  const slugIndex = new Map(groupSlugs.map((slug, i) => [slug, i]));
+
+  const pickTopmost = () => {
+    if (!visible.size) return; // keep the last active when nothing's intersecting
+    const topIndex = Math.min(...[...visible].map((slug) => slugIndex.get(slug)));
+    setActive(topIndex);
+  };
+
+  tocObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) visible.add(entry.target.id);
+      else visible.delete(entry.target.id);
+    }
+    pickTopmost();
+  // Bias the "in view" band toward the top of the viewport so the active group is the
+  // one you're reading near the top, not one barely peeking in from the bottom.
+  }, { rootMargin: "0px 0px -70% 0px" });
+
+  groupSlugs.forEach((slug) => {
+    const el = document.getElementById(slug);
+    if (el) tocObserver.observe(el);
+  });
+
+  // Seed an initial active state (top group) before any scroll happens.
+  if (groupSlugs.length) setActive(0);
 }
 
 function renderGroups(groups, metaFound) {
@@ -316,6 +365,10 @@ function renderGroups(groups, metaFound) {
 
     groupsEl.appendChild(groupEl);
   });
+
+  // Must run after the group elements are in the DOM (the observer looks them up by
+  // slug id) -- renderToc above only builds the rail markup, not the group cards.
+  observeGroupsForToc(groupSlugs);
 }
 
 // A "target" is either a checklist item (fingerprint = item's own fingerprint,

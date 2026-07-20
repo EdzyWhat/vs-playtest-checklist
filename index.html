@@ -88,6 +88,10 @@
     transition: background 0.15s, width 0.15s;
   }
   .toc:hover .toc-tick { background: var(--accent); width: 16px; }
+  /* Scroll-spy: the tick for the group currently in view stays lit even when the rail
+     is collapsed, so the rail doubles as a "you are here" position indicator. Hover
+     (above) still lights every tick; this just keeps the active one marked at rest. */
+  .toc-tick.active { background: var(--accent); width: 16px; }
   .toc-panel {
     position: absolute;
     top: 50%;
@@ -128,6 +132,9 @@
     font-size: 0.85rem;
   }
   .toc-group-link:hover { color: var(--accent); }
+  /* The expanded panel's counterpart to the active tick: the current group's link is
+     highlighted so, once hovered open, the panel also shows where you are. */
+  .toc-group-link.active { color: var(--accent); font-weight: 600; }
   .toc-panel li > .count {
     color: var(--dim);
     font-size: 0.75rem;
