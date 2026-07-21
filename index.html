@@ -183,6 +183,13 @@
     font-size: 1rem;
     color: var(--text);
   }
+  /* In the ToC the lead-in is just the start of a compact subitem link, not a card
+     heading -- rein in the 1rem bold above so it sits in the hierarchy with the
+     surrounding subitem text (.toc-subitem a is 0.72rem) rather than overpowering it. */
+  .toc-subitem .item-lead-in {
+    font-size: 0.75rem;
+    font-weight: 400;
+  }
   .item-text code {
     background: #000000aa;
     padding: 1px 5px;
