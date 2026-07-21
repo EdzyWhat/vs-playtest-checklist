@@ -61,10 +61,10 @@
   }
   /* Pinned to the right edge of the viewport (not the content column) so it stays
      reachable no matter how far down the page you've scrolled. Collapsed, it's just a
-     thin rail of ticks -- one per group, proportionally spaced down the page like a
-     scrollbar -- so it doesn't compete with the checklist for attention. Hovering
-     expands it into the full readable/clickable list; nothing else on the page shifts,
-     since it's fixed/floating rather than participating in layout. */
+     thin rail of ticks -- one per item, clustered by group -- so it doesn't compete with
+     the checklist for attention while still tracking your position at item granularity.
+     Hovering expands it into the full readable/clickable list; nothing else on the page
+     shifts, since it's fixed/floating rather than participating in layout. */
   .toc {
     position: fixed;
     top: 0;
@@ -76,8 +76,9 @@
     flex-direction: column;
     justify-content: center;
     align-items: flex-end;
-    gap: 10px;
+    gap: 5px;
     padding: 16px 10px;
+    overflow-y: auto;
   }
   .toc-tick {
     width: 10px;
@@ -85,10 +86,14 @@
     border-radius: 2px;
     background: var(--border);
     margin-left: auto;
+    flex: 0 0 auto;
     transition: background 0.15s, width 0.15s;
   }
+  /* One tick per item now packs the rail; add breathing room above the first tick of
+     each group (after the first) so the rail still visually clusters by section. */
+  .toc-tick-group-start { margin-top: 11px; }
   .toc:hover .toc-tick { background: var(--accent); width: 16px; }
-  /* Scroll-spy: the tick for the group currently in view stays lit even when the rail
+  /* Scroll-spy: the tick for the item currently in view stays lit even when the rail
      is collapsed, so the rail doubles as a "you are here" position indicator. Hover
      (above) still lights every tick; this just keeps the active one marked at rest. */
   .toc-tick.active { background: var(--accent); width: 16px; }
@@ -163,6 +168,9 @@
     text-overflow: ellipsis;
   }
   .toc-subitem a:hover { color: var(--accent); }
+  /* Scroll-spy: the item currently in view is highlighted in the expanded panel, the
+     item-granularity counterpart to the lit tick on the collapsed rail. */
+  .toc-subitem.active a { color: var(--accent); font-weight: 600; }
   .item {
     background: var(--panel);
     border: 1px solid var(--border);
