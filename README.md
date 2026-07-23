@@ -41,12 +41,18 @@ reporter/tester claims a result, someone else verifies before closing it out.
   confirmed by design.
 - **Optional:** an item's description may lead with a `**Up to four words.**` summary —
   a quick "what to actually do" flag before the fuller description (see
-  `7d808ca9` above). The checklist page renders that fragment bolded and strips the
-  `**` markers; items without it render exactly as plain text. This is purely a
+  `7d808ca9` above). The checklist page renders that fragment bolded (and slightly
+  larger) and strips the `**` markers; items without it render normally. This is purely a
   rendering convention this app understands — nothing upstream (parsing,
   fingerprinting, confirmation) treats it specially. Whatever agent/skill authors a
   project's `TESTING.md` decides whether to write these lead-ins; keep them imperative
   and concrete (`Scroll the lectern`, not `Verify that scrolling works correctly`).
+- **Inline markdown:** within a description or a verdict/progress note, `` `code` ``,
+  `**bold**`, and `*italic*` render as formatted inline markup (a code chip, bold, and
+  italic respectively) rather than showing literal backticks/asterisks. This is a small
+  fixed subset — block-level markdown (lists, headings, links) is not rendered. Content is
+  HTML-escaped before this markup is applied, so nothing in `TESTING.md` can inject markup
+  into the page.
 
 ## Running it
 
@@ -113,6 +119,68 @@ Open on the other computer (try the name first, fall back to the IP):
 Security note: the token guards against other devices on the network, but it does travel
 in the URL (so it can land in the Windows browser's history). This is a home-LAN dev
 tool, not an internet-facing service — don't expose it to the public internet.
+
+## Item lifecycle: tabs and status
+
+Not every checklist item is something to test *right now*. An item has a lifecycle,
+derived entirely from the verdict annotation an agent writes beneath it in `TESTING.md`
+(the bold lead word — see the format section above). The page groups items into tabs by
+that status, so the working list stays focused while nothing is lost:
+
+| Annotation under the item | Tab | Box |
+|---|---|---|
+| *(none)* | **To Test** | `[ ]` |
+| `**Still broken <date>:** …` | **To Test** (badged "broken · retest") | `[ ]` |
+| `**Confirmed <date>** …` | **Completed** | `[x]` |
+| `**Backlogged <date>** …` | **Backlog** — deferred; not ready to test | `[ ]` |
+| `**Obsolete <date>** …` | **Obsolete** — feature changed; test no longer applies | `[ ]` |
+
+Only the active tab's items render; the rest stay in the page (just hidden), so marks you
+made before switching tabs aren't lost. Confirmed/backlog/obsolete items render dimmed —
+they're a record, not the day's work. A **still-broken** item deliberately stays on **To
+Test** (badged) because it needs a retest after the fix, rather than being tucked away as
+done. `Backlogged`/`Obsolete` are new verdicts in the same grammar the parser already
+understood — a `TESTING.md` that only uses `Confirmed`/`Still broken` behaves exactly as
+before.
+
+Items are **kept** across regeneration once they carry any verdict — that's the point of
+the buckets. The authoring skill that writes `TESTING.md` (for scribe, `what-to-test`)
+merges the active items it derives from the source tasks with the retained,
+verdict-carrying ones, so a completed or obsolete item doesn't silently vanish just
+because its underlying task is no longer an open to-do.
+
+### Annotation timeline (multiple notes per item)
+
+An item under active iteration accumulates *several* annotation bullets over successive
+passes — a `**Still broken …**` verdict, then a `**Deferred …**` progress note, then
+`**Debug aids staged …**`, and so on. Each `- **<bold label>:** <body>` bullet beneath an
+item is parsed as its own **timeline entry** and rendered on its own line, newest last,
+rather than being concatenated into one paragraph. The **latest** entry is always expanded
+and visually focused (accent rail + "Latest" tag) — that's the guidance that matters right
+now; older entries collapse to just their bold label and expand on click. This keeps a
+long-running item readable instead of turning into a wall of text.
+
+Only entries whose label *leads with a recognized verdict* (`Confirmed`, `Still broken`,
+`Backlogged`, `Obsolete`) carry a lifecycle **kind**; any other lead (`Deferred`, `Target
+defined`, `Debug aids staged`, …) is a freeform progress note that doesn't move the item
+between tabs. The item's tab bucket is derived from its **most recent verdict-bearing
+entry**, so a fresh `**Still broken …**` line keeps it on **To Test** even if later
+progress notes follow. Agents writing `TESTING.md` don't need to do anything special —
+just keep appending dated bullets in the existing `- **Lead:** body` grammar.
+
+## Reviewing submissions (and the "awaiting review" banner)
+
+Submitting queues a report; an agent then reviews it and records verdicts into
+`TESTING.md` — the app itself never does. The full reviewing-agent contract is
+[`REVIEW.md`](REVIEW.md): for every item a report touched, end in a terminal bucket
+(Confirmed/Backlogged/Obsolete), flag it Still broken, or explicitly leave it untested
+with a reason — no item is left in limbo.
+
+Once a report is fully processed, the agent moves its JSON into
+`.playtest-submissions/reviewed/`. The page shows a **"N submissions awaiting review"**
+banner counting the loose (not-yet-reviewed) reports; moving processed ones to `reviewed/`
+is what clears it. That banner is the human's backstop — if the agent forgets to resolve
+an item or move the file, the count stays up and stays visible.
 
 ## Where submissions go
 

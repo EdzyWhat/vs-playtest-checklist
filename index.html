@@ -170,6 +170,55 @@
   /* Scroll-spy: the item currently in view is highlighted in the expanded panel, the
      item-granularity counterpart to the lit tick on the collapsed rail. */
   .toc-subitem.active a { color: var(--accent); font-weight: 600; }
+  /* Tabs across the top switch which lifecycle bucket is shown. Items live in exactly
+     one bucket, derived from their TESTING.md verdict annotation (see app.js
+     bucketForItem): To Test (untested + still-broken), Completed, Backlog, Obsolete.
+     Only the active tab's items render; the rest stay in the DOM (hidden) so any marks
+     made before switching tabs aren't lost. */
+  .tab-bar {
+    display: flex;
+    gap: 2px;
+    margin-bottom: 22px;
+    border-bottom: 1px solid var(--border);
+  }
+  .tab-btn {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--dim);
+    padding: 8px 14px;
+    font-size: 0.88rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: -1px;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--text); border-bottom-color: var(--accent); }
+  .tab-count {
+    font-size: 0.72rem;
+    color: var(--dim);
+    background: #00000055;
+    border-radius: 10px;
+    padding: 1px 7px;
+    min-width: 20px;
+    text-align: center;
+  }
+  .tab-btn.active .tab-count { color: var(--text); }
+  /* Backstop accountability signal: shows while reports sit unreviewed in
+     .playtest-submissions/ (see server.py count_pending_submissions). Clears once an
+     agent moves them to reviewed/. */
+  .review-banner {
+    background: #2a2620;
+    border: 1px solid #6b5a2e;
+    color: #e8d9a8;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 0.85rem;
+    line-height: 1.4;
+    margin-bottom: 20px;
+  }
   .item {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -177,7 +226,27 @@
     padding: 12px 14px;
     margin-bottom: 10px;
   }
-  .item.already-confirmed { opacity: 0.55; }
+  /* An item or group with no items in the active tab is hidden, not removed -- keeps its
+     DOM (and any in-progress marks) alive across tab switches. */
+  .item.tab-hidden, .group.tab-hidden { display: none; }
+  /* Terminal-status items (confirmed/backlog/obsolete) render dimmed -- they're a record,
+     not the day's work. Broken items are deliberately NOT dimmed: they sit on the To Test
+     list precisely because they still need a retest. */
+  .item.terminal-status { opacity: 0.55; }
+  /* A small status badge next to an item's text -- currently only "broken" (a
+     still-broken item kept on the To Test list, flagged for a retest). */
+  .item-badge {
+    display: inline-block;
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding: 2px 7px;
+    border-radius: 5px;
+    margin-left: 8px;
+    vertical-align: middle;
+    white-space: nowrap;
+  }
+  .item-badge.broken { background: var(--fail); color: #0a0a0a; }
   .item-top {
     display: flex;
     justify-content: space-between;
@@ -204,14 +273,83 @@
     font-size: 0.75rem;
     color: var(--dim);
   }
-  .existing-annotation {
+  /* An item's agent-written history renders as a timeline of entries (see app.js
+     renderAnnotationTimeline): older entries collapse to their bold label, the latest is
+     always expanded and focused. Replaces the old single-blob .existing-annotation, which
+     mashed the whole history into one unreadable paragraph. */
+  .annotation-timeline {
+    margin: -2px 0 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .annotation-entry {
+    border-radius: 6px;
+    padding: 2px 0;
+  }
+  .annotation-header {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    font-size: 0.8rem;
+    padding: 3px 6px;
+    border-radius: 5px;
+  }
+  .annotation-header.clickable { cursor: pointer; user-select: none; }
+  .annotation-header.clickable:hover { background: #ffffff08; }
+  /* Status dot: neutral by default (a freeform progress note), colored per verdict kind. */
+  .annotation-dot {
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--dim);
+    align-self: center;
+  }
+  .annotation-entry[data-kind="confirmed"] .annotation-dot { background: var(--pass); }
+  .annotation-entry[data-kind="broken"] .annotation-dot { background: var(--fail); }
+  .annotation-entry[data-kind="backlog"] .annotation-dot { background: var(--accent); }
+  .annotation-entry[data-kind="obsolete"] .annotation-dot { background: var(--border); }
+  .annotation-label {
+    color: var(--text);
+    font-weight: 600;
+    flex: 1;
+  }
+  /* Older (collapsed) entries recede -- their labels dim so the latest reads as primary. */
+  .annotation-entry.collapsed .annotation-label { color: var(--dim); font-weight: 500; }
+  /* A chevron affordance on collapsible (older, non-empty) entries. */
+  .annotation-header.clickable::after {
+    content: "▾";
+    color: var(--dim);
+    font-size: 0.7rem;
+    transition: transform 0.12s;
+  }
+  .annotation-entry.collapsed .annotation-header.clickable::after { transform: rotate(-90deg); }
+  .annotation-latest-tag {
+    flex: 0 0 auto;
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+  .annotation-body {
     font-size: 0.8rem;
     color: var(--dim);
-    margin: -2px 0 8px;
-    padding-left: 2px;
-    border-left: 2px solid var(--border);
-    padding-left: 8px;
+    line-height: 1.45;
+    padding: 3px 6px 4px 20px;
   }
+  /* Collapsed older entries hide their body (label-only); expanding drops it back in. */
+  .annotation-entry.collapsed .annotation-body { display: none; }
+  /* The latest entry is the focused card: accent left-rail + subtle tint, full brightness. */
+  .annotation-entry.latest {
+    border-left: 2px solid var(--accent);
+    background: #5b9dff14;
+    padding-left: 4px;
+  }
+  .annotation-entry.latest .annotation-body { color: var(--text); }
   .verdicts { display: flex; gap: 6px; margin-bottom: 8px; }
   .verdict-btn {
     flex: 1;
@@ -414,6 +552,10 @@
   </div>
 
   <div id="toc" class="toc"></div>
+
+  <div id="reviewBanner" class="review-banner" style="display:none;"></div>
+
+  <div id="tabBar" class="tab-bar" style="display:none;"></div>
 
   <div id="groups"></div>
 

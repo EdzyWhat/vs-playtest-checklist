@@ -20,6 +20,8 @@ const statusEl = document.getElementById("status");
 const generalNotesEl = document.getElementById("generalNotes");
 const detailedModeEl = document.getElementById("detailedMode");
 const generalScreenshotsEl = document.getElementById("generalScreenshots");
+const tabBarEl = document.getElementById("tabBar");
+const reviewBannerEl = document.getElementById("reviewBanner");
 
 // When served over the LAN the server requires a token on /api/* requests (see
 // server.py's --lan mode). It's carried in the page URL (?token=...), so we read it once
@@ -38,6 +40,39 @@ const DETAILED_MODE_KEY = "playtest-checklist-detailed-mode";
 // silently reset what you'd already tucked away. Stored as an array of names rather
 // than one key per group so there's a single localStorage entry to reason about.
 const COLLAPSED_GROUPS_KEY = "playtest-checklist-collapsed-groups";
+
+// Which lifecycle tab is showing. Persisted so a reload keeps you where you were.
+const ACTIVE_TAB_KEY = "playtest-checklist-active-tab";
+
+// The tabs, in display order. Each item maps to exactly one bucket via bucketForItem():
+//   totest    -- untested items AND items flagged "Still broken" (they need a retest, so
+//                they belong on the working list, badged; see bucketForItem)
+//   completed -- items with a **Confirmed** verdict
+//   backlog   -- items with a **Backlogged** verdict (deferred; not ready to test)
+//   obsolete  -- items with an **Obsolete** verdict (feature changed; test no longer applies)
+const TABS = [
+  { id: "totest", label: "To Test" },
+  { id: "completed", label: "Completed" },
+  { id: "backlog", label: "Backlog" },
+  { id: "obsolete", label: "Obsolete" },
+];
+const DEFAULT_TAB = "totest";
+
+let activeTab = localStorage.getItem(ACTIVE_TAB_KEY) || DEFAULT_TAB;
+if (!TABS.some((t) => t.id === activeTab)) activeTab = DEFAULT_TAB;
+
+// Derive an item's tab bucket from its latest verdict annotation (parsed server-side into
+// item.latestKind -- the kind of the most recent verdict-bearing entry, ignoring freeform
+// progress notes). No verdict -> it's still to test. "broken" also lands in "totest" -- a
+// still-broken item stays on the working list for a retest rather than being tucked away as
+// done. Only "confirmed"/"backlog"/"obsolete" are terminal buckets.
+function bucketForItem(item) {
+  const kind = item.latestKind;
+  if (kind === "confirmed") return "completed";
+  if (kind === "backlog") return "backlog";
+  if (kind === "obsolete") return "obsolete";
+  return "totest"; // null (untested) or "broken" (needs retest)
+}
 
 function loadCollapsedGroups() {
   try {
@@ -69,6 +104,9 @@ function slugifyGroupName(name, seenSlugs) {
 }
 
 let loadedGroups = [];
+// Slugs for loadedGroups, index-aligned -- computed once in renderGroups (from the full
+// group set, so ids stay stable) and reused when a tab switch rebuilds the filtered TOC.
+let loadedGroupSlugs = [];
 
 // Screenshots not tied to a specific checklist item (pasted into the general-notes
 // field) collect here. Mirrors each item's own `_screenshots` array -- see
@@ -101,19 +139,110 @@ function escapeHtml(str) {
   }[c]));
 }
 
+// A deliberately tiny inline-markdown renderer for the little bit of markup TESTING.md
+// prose actually uses: `code`, **bold**, and *italic*. Everything HTML-dangerous is escaped
+// FIRST; then we re-inject only these three tags, so this never opens an injection path via
+// TESTING.md content (backticks/asterisks survive escaping as literals). Code spans are
+// pulled out before bold/italic so a `*` INSIDE code (e.g. `PinnedRowTint*`) is never
+// mistaken for an italic marker. Block-level markdown (lists, headings, links) is out of
+// scope on purpose -- these fields are single runs of prose, not documents.
+function renderInlineMarkdown(text) {
+  const escaped = escapeHtml(text);
+  // split() with a capture group interleaves the non-code parts (even indices) with the
+  // captured code-span contents (odd indices).
+  return escaped
+    .split(/`([^`]+)`/)
+    .map((part, i) => {
+      if (i % 2 === 1) return `<code>${part}</code>`; // inside a code span: no further markup
+      // Bold before italic so `**x**` is consumed by the double-star rule rather than
+      // leaving a stray `*` for the single-star rule to trip over.
+      return part
+        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/\*([^*]+)\*/g, "<em>$1</em>");
+    })
+    .join("");
+}
+
 // Optional convention (see this repo's README / the authoring skill that writes
 // TESTING.md): an item's text may lead with a `**Up to four words.**` summary -- a
-// quick "what to actually do" flag before the fuller description. Purely a rendering
-// treatment (bold + slight size bump on that fragment); items without it render exactly
-// as before. Escape first, then re-inject the one bit of markup we allow, so this never
-// opens an HTML-injection path via TESTING.md content.
+// quick "what to actually do" flag before the fuller description. The lead-in gets a
+// distinct treatment (bold + slight size bump); the rest of the description renders through
+// the shared inline-markdown renderer above, so `code`/**bold**/*italic* in a description
+// come out formatted rather than as literal asterisks/backticks.
 const LEAD_IN_RE = /^\*\*([^*]+)\*\*\s*/;
 
 function formatItemText(text) {
-  const escaped = escapeHtml(text);
-  const match = escaped.match(LEAD_IN_RE);
-  if (!match) return escaped;
-  return `<strong class="item-lead-in">${match[1]}</strong> ${escaped.slice(match[0].length)}`;
+  const match = text.match(LEAD_IN_RE);
+  if (!match) return renderInlineMarkdown(text);
+  const rest = text.slice(match[0].length);
+  return `<strong class="item-lead-in">${escapeHtml(match[1])}</strong> ${renderInlineMarkdown(rest)}`;
+}
+
+// An item accumulates a timeline of agent-written annotation entries (one per
+// `- **label:** body` bullet under it in TESTING.md -- see server.py). Rather than mashing
+// the whole history into one paragraph (the old behavior, which produced an unreadable wall
+// of text during a long iteration), render each entry on its own line: older entries
+// collapse to just their bold label (click to expand the body), and the LATEST entry is
+// always expanded and visually focused -- that's the guidance that matters right now.
+//
+// Each entry carries an optional `kind` (a recognized verdict: confirmed/broken/backlog/
+// obsolete) which colors its dot; freeform progress notes (kind=null, e.g. "Deferred") get
+// a neutral dot. `.dataset.kind` is set so CSS can color per kind.
+function renderAnnotationTimeline(annotations) {
+  const wrap = document.createElement("div");
+  wrap.className = "annotation-timeline";
+  const lastIndex = annotations.length - 1;
+
+  annotations.forEach((entry, i) => {
+    const isLatest = i === lastIndex;
+    const entryEl = document.createElement("div");
+    entryEl.className = "annotation-entry" + (isLatest ? " latest" : " collapsed");
+    if (entry.kind) entryEl.dataset.kind = entry.kind;
+
+    // A header row: a status dot, the bold label, and (for older entries) a chevron
+    // affording expand/collapse. The whole header toggles collapse on click.
+    const headerEl = document.createElement("div");
+    headerEl.className = "annotation-header";
+
+    const dot = document.createElement("span");
+    dot.className = "annotation-dot";
+    headerEl.appendChild(dot);
+
+    const labelEl = document.createElement("span");
+    labelEl.className = "annotation-label";
+    labelEl.textContent = entry.label;
+    headerEl.appendChild(labelEl);
+
+    if (isLatest) {
+      const tag = document.createElement("span");
+      tag.className = "annotation-latest-tag";
+      tag.textContent = "Latest";
+      headerEl.appendChild(tag);
+    }
+
+    const bodyEl = document.createElement("div");
+    bodyEl.className = "annotation-body";
+    // innerHTML is safe here: renderInlineMarkdown escapes first, then re-injects only
+    // code/bold/italic tags -- so `code`/**bold**/*italic* in the note render formatted.
+    bodyEl.innerHTML = renderInlineMarkdown(entry.text);
+
+    // The latest entry is fixed-open (nothing to toggle). Older entries collapse/expand on
+    // a header click; if an older entry somehow has no body, there's nothing to reveal so
+    // don't make it look clickable.
+    if (!isLatest && entry.text) {
+      headerEl.classList.add("clickable");
+      headerEl.title = "Click to expand/collapse this note";
+      headerEl.addEventListener("click", () => {
+        entryEl.classList.toggle("collapsed");
+      });
+    }
+
+    entryEl.appendChild(headerEl);
+    if (entry.text) entryEl.appendChild(bodyEl);
+    wrap.appendChild(entryEl);
+  });
+
+  return wrap;
 }
 
 async function loadMeta() {
@@ -124,10 +253,27 @@ async function loadMeta() {
       pageTitleEl.textContent = `${data.projectName} — Playtest checklist`;
       document.title = `${data.projectName} — Playtest checklist`;
     }
+    renderReviewBanner(data.pendingSubmissions || 0);
     return data;
   } catch (err) {
     return { found: false };
   }
+}
+
+// Accountability backstop: while submitted reports sit unreviewed (loose JSON in
+// .playtest-submissions/, before an agent moves them to reviewed/), show a reminder so a
+// forgotten submission is visible to the human rather than silently lost. Count comes
+// from /api/meta (server.py count_pending_submissions).
+function renderReviewBanner(pending) {
+  if (!pending) {
+    reviewBannerEl.style.display = "none";
+    return;
+  }
+  const n = pending === 1 ? "1 submission" : `${pending} submissions`;
+  reviewBannerEl.style.display = "";
+  reviewBannerEl.textContent =
+    `📥 ${n} awaiting review. Ask your agent to review the queue in ` +
+    `.playtest-submissions/ and record a verdict for each item (see REVIEW.md).`;
 }
 
 // Pinned rail on the right edge of the viewport (see .toc in index.html): collapsed,
@@ -151,7 +297,7 @@ function renderToc(groups, groupSlugs) {
     ).join("")
   ).join("");
   const items = groups.map((group, i) => {
-    const confirmed = group.items.filter((it) => it.annotation && it.annotation.kind === "confirmed").length;
+    const confirmed = group.items.filter((it) => it.latestKind === "confirmed").length;
     const subItems = group.items.map((item) => {
       // Tooltip shows the plain text (lead-in markers stripped) since a title attribute
       // can't render the bolding formatItemText applies to the visible link text.
@@ -235,13 +381,14 @@ function renderGroups(groups, metaFound) {
     groupsEl.innerHTML = `<div class="empty">${escapeHtml(message)}</div>`;
     tocEl.innerHTML = "";
     tocEl.style.display = "none";
+    tabBarEl.style.display = "none";
     submitBtn.disabled = true;
     return;
   }
 
   const seenSlugs = new Set();
   const groupSlugs = groups.map((group) => slugifyGroupName(group.name, seenSlugs));
-  renderToc(groups, groupSlugs);
+  loadedGroupSlugs = groupSlugs;
 
   groups.forEach((group, groupIndex) => {
     const groupEl = document.createElement("div");
@@ -262,7 +409,7 @@ function renderGroups(groups, metaFound) {
     heading.textContent = group.name;
     headerEl.appendChild(heading);
 
-    const confirmedCount = group.items.filter((it) => it.annotation && it.annotation.kind === "confirmed").length;
+    const confirmedCount = group.items.filter((it) => it.latestKind === "confirmed").length;
     const countEl = document.createElement("span");
     countEl.className = "group-count";
     countEl.textContent = `${confirmedCount}/${group.items.length}`;
@@ -279,7 +426,15 @@ function renderGroups(groups, metaFound) {
 
     for (const item of group.items) {
       const itemEl = document.createElement("div");
-      itemEl.className = "item" + (item.annotation ? " already-confirmed" : "");
+      const bucket = bucketForItem(item);
+      // Terminal buckets (a done/parked record) render dimmed; a still-broken item is
+      // NOT terminal -- it sits on the To Test list awaiting a retest, so it stays at
+      // full strength and gets a "broken" badge instead (below).
+      const terminal = bucket !== "totest";
+      itemEl.className = "item" + (terminal ? " terminal-status" : "");
+      // The bucket drives which tab this item shows under -- read back by applyActiveTab
+      // when toggling tab-hidden, so tab switching never has to re-parse annotations.
+      itemEl.dataset.bucket = bucket;
       // Anchor target for the TOC panel's per-item sub-links (see renderToc) -- keyed by
       // fingerprint since it's already guaranteed unique and stable across re-renders.
       itemEl.id = `item-${item.fingerprint}`;
@@ -304,7 +459,12 @@ function renderGroups(groups, metaFound) {
 
       const textEl = document.createElement("div");
       textEl.className = "item-text";
-      textEl.innerHTML = `${formatItemText(item.text)} <code>${item.fingerprint}</code>`;
+      // A still-broken item is kept on the To Test list; badge it so it's visibly "retest
+      // this", not a fresh untested item.
+      const brokenBadge = item.latestKind === "broken"
+        ? ` <span class="item-badge broken" title="Flagged still broken on a prior pass -- retest after the fix">broken · retest</span>`
+        : "";
+      textEl.innerHTML = `${formatItemText(item.text)} <code>${item.fingerprint}</code>${brokenBadge}`;
       topEl.appendChild(textEl);
 
       const detailToggleBtn = document.createElement("button");
@@ -321,12 +481,8 @@ function renderGroups(groups, metaFound) {
 
       itemEl.appendChild(topEl);
 
-      if (item.annotation) {
-        const annoEl = document.createElement("div");
-        annoEl.className = "existing-annotation";
-        const label = item.annotation.kind === "confirmed" ? "Already confirmed" : "Already flagged broken";
-        annoEl.textContent = `${label}: ${item.annotation.text}`;
-        itemEl.appendChild(annoEl);
+      if (item.annotations && item.annotations.length) {
+        itemEl.appendChild(renderAnnotationTimeline(item.annotations));
       }
 
       const verdictsEl = document.createElement("div");
@@ -398,9 +554,97 @@ function renderGroups(groups, metaFound) {
     groupsEl.appendChild(groupEl);
   });
 
-  // Must run after the group elements are in the DOM (the observer looks them up by
-  // slug id) -- renderToc above only builds the rail markup, not the group cards.
-  observeGroupsForToc(groups);
+  // Build the tab bar, then show only the active tab's items. applyActiveTab handles the
+  // TOC (rail + observer) for the filtered set, so -- unlike before -- the rail only ever
+  // reflects the items actually visible under the current tab.
+  renderTabBar();
+  applyActiveTab();
+}
+
+// Counts per bucket across all loaded items -- drives the little count pill on each tab.
+function bucketCounts() {
+  const counts = { totest: 0, completed: 0, backlog: 0, obsolete: 0 };
+  loadedGroups.forEach((group) => {
+    group.items.forEach((item) => { counts[bucketForItem(item)] += 1; });
+  });
+  return counts;
+}
+
+function renderTabBar() {
+  if (!loadedGroups.length) {
+    tabBarEl.style.display = "none";
+    return;
+  }
+  const counts = bucketCounts();
+  tabBarEl.style.display = "";
+  tabBarEl.innerHTML = "";
+  for (const tab of TABS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "tab-btn" + (tab.id === activeTab ? " active" : "");
+    btn.dataset.tab = tab.id;
+    btn.innerHTML = `${tab.label} <span class="tab-count">${counts[tab.id]}</span>`;
+    btn.addEventListener("click", () => {
+      if (activeTab === tab.id) return;
+      activeTab = tab.id;
+      localStorage.setItem(ACTIVE_TAB_KEY, activeTab);
+      tabBarEl.querySelectorAll(".tab-btn").forEach((b) =>
+        b.classList.toggle("active", b.dataset.tab === activeTab));
+      applyActiveTab();
+    });
+    tabBarEl.appendChild(btn);
+  }
+}
+
+// Show only the items whose bucket matches the active tab; hide the rest (kept in the DOM
+// so marks survive a tab switch). A group with no visible items is hidden whole. Then
+// rebuild the TOC for just the visible subset. Called on first render and every tab switch.
+function applyActiveTab() {
+  const visibleGroups = [];
+  const visibleSlugs = [];
+  loadedGroups.forEach((group, groupIndex) => {
+    const groupEl = document.getElementById(loadedGroupSlugs[groupIndex]);
+    if (!groupEl) return;
+    let anyVisible = false;
+    group.items.forEach((item) => {
+      const itemEl = groupEl.querySelector(`.item[data-fingerprint="${item.fingerprint}"]`);
+      if (!itemEl) return;
+      const show = itemEl.dataset.bucket === activeTab;
+      itemEl.classList.toggle("tab-hidden", !show);
+      if (show) anyVisible = true;
+    });
+    groupEl.classList.toggle("tab-hidden", !anyVisible);
+    if (anyVisible) {
+      // The filtered group carries only its visible items into the TOC.
+      visibleGroups.push({
+        name: group.name,
+        items: group.items.filter((it) => bucketForItem(it) === activeTab),
+      });
+      visibleSlugs.push(loadedGroupSlugs[groupIndex]);
+    }
+  });
+
+  if (!visibleGroups.length) {
+    // Nothing in this bucket -- show a per-tab empty note in the (otherwise all-hidden)
+    // groups area, and clear the rail. Reuses the shared .empty styling.
+    let emptyEl = groupsEl.querySelector(".empty.tab-empty");
+    if (!emptyEl) {
+      emptyEl = document.createElement("div");
+      emptyEl.className = "empty tab-empty";
+      groupsEl.appendChild(emptyEl);
+    }
+    const label = TABS.find((t) => t.id === activeTab).label;
+    emptyEl.textContent = `Nothing in "${label}" yet.`;
+    emptyEl.style.display = "";
+    tocEl.innerHTML = "";
+    tocEl.style.display = "none";
+    return;
+  }
+  const existingEmpty = groupsEl.querySelector(".empty.tab-empty");
+  if (existingEmpty) existingEmpty.style.display = "none";
+
+  renderToc(visibleGroups, visibleSlugs);
+  observeGroupsForToc(visibleGroups);
 }
 
 // A "target" is either a checklist item (fingerprint = item's own fingerprint,

@@ -28,10 +28,16 @@ the write endpoints to the network, --lan auto-generates a shared token that eve
 /api/* request must carry (in the ?token= query param or an X-Playtest-Token header).
 
 Endpoints:
-    GET  /api/meta       -> {"projectName": ..., "testingFilePath": ..., "found": bool}
+    GET  /api/meta       -> {"projectName": ..., "testingFilePath": ..., "found": bool,
+                             "pendingSubmissions": int} -- the last is the count of
+                             submitted reports not yet moved to .playtest-submissions/
+                             reviewed/, i.e. still awaiting an agent's review.
     GET  /api/checklist  -> parsed TESTING.md as JSON (groups of items, each with its
                              fingerprint, task id, description text, current checked
-                             state, and any existing agent-written annotation).
+                             state, the list of agent-written annotation entries (one per
+                             timeline bullet: {label, kind, text}), and latestKind -- the
+                             kind of the most recent verdict-bearing entry, which drives
+                             the item's tab bucket).
     POST /api/submit     -> body is the full submitted form (per-item pass/fail/unsure
                              + notes, plus general notes); written verbatim (plus a
                              server-stamped timestamp) to
@@ -77,7 +83,30 @@ TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 ITEM_RE = re.compile(r"^- \[( |x)\] `([0-9a-f]{8})` (.*)$")
 HEADING_RE = re.compile(r"^## (.+)$")
-ANNOTATION_START_RE = re.compile(r"^\s+- \*\*(Confirmed|Still broken)([^*]*)\*\*:?\s*(.*)$")
+# A bullet under an item is one timeline entry: `- **<bold label>:** <body...>`. The label
+# is whatever the agent bolded (e.g. "Still broken 2026-07-22", "Deferred 2026-07-22", "Debug
+# aids staged 2026-07-22"); the body is the prose after it, which may itself contain **bold**
+# runs -- hence the non-greedy `(.+?)` stops at the FIRST `**`, so only the lead is the label.
+# An item accumulates a LIST of these across passes; the page renders each on its own line
+# (see app.js) instead of mashing the whole history into one blob.
+ANNOTATION_ENTRY_RE = re.compile(r"^\s+- \*\*(.+?)\*\*:?\s*(.*)$")
+# When an entry's label STARTS with one of these verdict phrases, that entry carries a
+# lifecycle kind (below); the item's bucket is derived from its most recent kinded entry.
+# Entries with any other lead (e.g. "Deferred", "Target defined") are freeform progress
+# notes -- kind stays null, they don't move the item between tabs. `\b` so "Confirmed" and
+# "Confirmedish" don't collide.
+#   Confirmed    -> "completed" bucket (the item passed)
+#   Still broken -> stays on the active "to test" list, badged for a retest
+#   Backlogged   -> "backlog" bucket (deferred; not ready to test yet)
+#   Obsolete     -> "obsolete" bucket (the feature changed; the test no longer applies)
+# Kept backward-compatible: files that only ever used Confirmed/Still broken parse the same.
+VERDICT_LEAD_RE = re.compile(r"^(Confirmed|Still broken|Backlogged|Obsolete)\b")
+ANNOTATION_KINDS = {
+    "Confirmed": "confirmed",
+    "Still broken": "broken",
+    "Backlogged": "backlog",
+    "Obsolete": "obsolete",
+}
 TASK_ID_SUFFIX_RE = re.compile(r"\s*\*\(([^)]+)\)\*\s*$")
 
 # Loose on purpose: real fingerprints are 8 hex chars, but "general" notes (not tied to
@@ -124,10 +153,13 @@ def parse_testing_md(testing_file_path):
     groups = []
     current_group = None
     current_item = None
-    collecting_annotation = False
+    # Points at the annotation entry (a dict in current_item["annotations"]) whose body
+    # we're currently appending continuation lines to. None until the first `- **...**`
+    # bullet under an item is seen.
+    current_entry = None
 
     def flush_item():
-        nonlocal current_item
+        nonlocal current_item, current_entry
         if current_item is None:
             return
         text = " ".join(current_item["text_parts"]).strip()
@@ -135,20 +167,29 @@ def parse_testing_md(testing_file_path):
         task_id = m.group(1) if m else None
         if m:
             text = text[: m.start()].strip()
-        annotation = None
-        if current_item["annotation_parts"]:
-            annotation = {
-                "kind": current_item["annotation_kind"],
-                "text": " ".join(current_item["annotation_parts"]).strip(),
-            }
+        # Each annotation entry is one timeline bullet: {label, text, kind}. Finalize the
+        # per-entry text_parts into a single string here.
+        annotations = []
+        for entry in current_item["annotations"]:
+            annotations.append({
+                "label": entry["label"],
+                "kind": entry["kind"],
+                "text": " ".join(entry["text_parts"]).strip(),
+            })
+        # The item's bucket is driven by its most recent KINDED entry (a recognized verdict).
+        # Freeform progress notes (kind=None) don't move it between tabs. `latestKind` mirrors
+        # what the old single `annotation.kind` field meant, so bucketForItem/badges are unchanged.
+        latest_kind = next((e["kind"] for e in reversed(annotations) if e["kind"]), None)
         current_group["items"].append({
             "fingerprint": current_item["fingerprint"],
             "checked": current_item["checked"],
             "taskId": task_id,
             "text": text,
-            "annotation": annotation,
+            "annotations": annotations,
+            "latestKind": latest_kind,
         })
         current_item = None
+        current_entry = None
 
     for line in lines:
         heading_match = HEADING_RE.match(line)
@@ -158,7 +199,7 @@ def parse_testing_md(testing_file_path):
             flush_item()
             current_group = {"name": heading_match.group(1), "items": []}
             groups.append(current_group)
-            collecting_annotation = False
+            current_entry = None
             continue
 
         if item_match:
@@ -172,37 +213,61 @@ def parse_testing_md(testing_file_path):
                 "fingerprint": item_match.group(2),
                 "checked": item_match.group(1) == "x",
                 "text_parts": [item_match.group(3)],
-                "annotation_parts": [],
-                "annotation_kind": None,
+                "annotations": [],
             }
-            collecting_annotation = False
+            current_entry = None
             continue
 
         if current_item is None:
             continue
 
-        annotation_match = ANNOTATION_START_RE.match(line)
-        if annotation_match:
-            collecting_annotation = True
-            current_item["annotation_kind"] = (
-                "confirmed" if annotation_match.group(1) == "Confirmed" else "broken"
-            )
-            rest = (annotation_match.group(2) + " " + annotation_match.group(3)).strip()
-            if rest:
-                current_item["annotation_parts"].append(rest)
+        entry_match = ANNOTATION_ENTRY_RE.match(line)
+        if entry_match:
+            # A new `- **label:** body` bullet -- start a fresh timeline entry. Its kind is
+            # set only when the label leads with a recognized verdict phrase; otherwise it's
+            # a freeform progress note (kind stays None).
+            label = entry_match.group(1).strip()
+            verdict_match = VERDICT_LEAD_RE.match(label)
+            current_entry = {
+                "label": label,
+                "kind": ANNOTATION_KINDS[verdict_match.group(1)] if verdict_match else None,
+                "text_parts": [],
+            }
+            body = entry_match.group(2).strip()
+            if body:
+                current_entry["text_parts"].append(body)
+            current_item["annotations"].append(current_entry)
             continue
 
         stripped = line.strip()
         if not stripped:
             continue
 
-        if collecting_annotation:
-            current_item["annotation_parts"].append(stripped)
+        if current_entry is not None:
+            # A continuation line of the current entry's body (wrapped prose under a bullet).
+            current_entry["text_parts"].append(stripped)
         else:
+            # Still in the item's own description (no annotation bullet seen yet).
             current_item["text_parts"].append(stripped)
 
     flush_item()
     return groups
+
+
+def count_pending_submissions(submissions_dir):
+    """How many submitted reports haven't been reviewed yet -- the count of loose
+    `<timestamp>.json` files sitting directly in .playtest-submissions/. A reviewing
+    agent moves each report into .playtest-submissions/reviewed/ once it has resolved
+    every item that report touched into a terminal bucket (see REVIEW.md), so this count
+    is the backstop signal the page surfaces: non-zero means work is queued for review.
+    The reviewed/ subdir and the screenshots/ subdir are directories, not loose files, so
+    they're naturally excluded by the isfile + .json filter."""
+    if not submissions_dir or not os.path.isdir(submissions_dir):
+        return 0
+    return sum(
+        1 for name in os.listdir(submissions_dir)
+        if name.endswith(".json") and os.path.isfile(os.path.join(submissions_dir, name))
+    )
 
 
 def make_handler(testing_file_path, token=None):
@@ -261,6 +326,7 @@ def make_handler(testing_file_path, token=None):
                     "projectName": project_name,
                     "testingFilePath": testing_file_path,
                     "found": bool(testing_file_path and os.path.isfile(testing_file_path)),
+                    "pendingSubmissions": count_pending_submissions(submissions_dir),
                 })
                 return
             if path == "/api/checklist":
